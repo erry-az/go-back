@@ -3,10 +3,9 @@ package server
 import (
 	"context"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/erry-az/go-back/pkg/graceful"
 	"github.com/gofiber/fiber/v2"
+	"github.com/rs/zerolog/log"
 )
 
 type RESTConfig struct {
@@ -26,7 +25,7 @@ func StartREST(cfg *RESTConfig, routes ...RestRoute) {
 		route(app)
 	}
 
-	watcher := graceful.Init()
+	watcher := graceful.New()
 
 	watcher.RegisterProcess(func() error {
 		return app.Listen(cfg.Port)

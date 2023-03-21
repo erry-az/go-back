@@ -3,17 +3,16 @@ package graceful
 import (
 	"context"
 	"errors"
-	"log"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGraceful_Run(t *testing.T) {
-	graceful := Init()
+	graceful := New()
 
 	graceful.SetMaxShutdownProcess(0)
 	graceful.SetMaxShutdownTime(0)
@@ -22,43 +21,31 @@ func TestGraceful_Run(t *testing.T) {
 
 	graceful.SetMaxShutdownTime(1 * time.Second)
 	graceful.SetMaxShutdownProcess(1)
+	graceful.SetCancelOnError(false)
 
 	graceful.RegisterProcess(func() error {
 		return nil
 	})
 
-	app := fiber.New()
-
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendString("Hello, World 👋!")
-	})
-
 	graceful.RegisterProcess(func() error {
-		return app.Listen(":3000")
+		log.Info().Msg("start new process")
+		return nil
 	})
-
-	log.Println("test")
 
 	graceful.RegisterShutdownProcessWithTag(func(ctx context.Context) error {
-		log.Println("test 6")
+		log.Info().Msg("stop new process")
 		time.Sleep(1 * time.Second)
-		return app.Shutdown()
+		return nil
 	}, "test app fiber")
 
-	log.Println("test 2")
 	graceful.RegisterShutdownProcess(func(ctx context.Context) error {
-		log.Println("test 7")
 		time.Sleep(1 * time.Second)
 		return errors.New("err")
 	})
 
-	log.Println("test 3")
 	go func() {
-		log.Println("test 4", syscall.Getpid())
 		time.Sleep(1 * time.Second)
 		_ = syscall.Kill(syscall.Getpid(), syscall.SIGINT)
-		log.Println("test 5")
-
 	}()
 
 	err := graceful.Wait()
@@ -67,7 +54,7 @@ func TestGraceful_Run(t *testing.T) {
 }
 
 func TestGraceful_EmptyShutdown(t *testing.T) {
-	graceful := Init()
+	graceful := New()
 
 	graceful.RegisterProcess(func() error {
 		return nil
@@ -81,4 +68,27 @@ func TestGraceful_EmptyShutdown(t *testing.T) {
 	err := graceful.Wait()
 
 	assert.Nil(t, err)
+}
+
+func TestGraceful_CancelOnError(t *testing.T) {
+	graceful := New()
+	graceful.SetCancelOnError(true)
+
+	graceful.RegisterProcess(func() error {
+		return nil
+	})
+
+	graceful.RegisterShutdownProcess(func(ctx context.Context) error {
+		time.Sleep(1 * time.Second)
+		return errors.New("err")
+	})
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		_ = syscall.Kill(syscall.Getpid(), syscall.SIGINT)
+	}()
+
+	err := graceful.Wait()
+
+	assert.NotNil(t, err)
 }

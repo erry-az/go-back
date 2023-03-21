@@ -13,10 +13,16 @@ import (
 )
 
 const (
-	defaultMaxShutdownTime    = 10 * time.Second
+	// defaultMaxShutdownTime default value for max shutdown time.
+	defaultMaxShutdownTime = 10 * time.Second
+	// defaultMaxShutdownProcess default value for max shutdown process.
 	defaultMaxShutdownProcess = 5
 )
 
+// defaultSignals default os signal that will be handled.
+var defaultSignals = []os.Signal{os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP}
+
+// Graceful struct to hold the provided options and dependencies
 type Graceful struct {
 	groupCtx, signalCtx context.Context
 	signalCancel        context.CancelFunc
@@ -25,17 +31,26 @@ type Graceful struct {
 	shutdownTags        []string
 	maxShutdownTime     time.Duration
 	maxShutdownProcess  int
+	cancelOnError       bool
 }
 
-func Init() *Graceful {
-	return InitContext(context.Background())
+// New initiate graceful using context background.
+func New() *Graceful {
+	return NewContext(
+		context.Background(),
+		defaultSignals...)
 }
 
-func InitContext(ctx context.Context) *Graceful {
+// NewContext initiate graceful with context param.
+// create signal waiting from os signal that will be triggered when some signal is called.
+func NewContext(ctx context.Context, signals ...os.Signal) *Graceful {
+	if len(signals) < 1 {
+		signals = defaultSignals
+	}
+
 	var (
-		signalCtx, signalCancel = signal.NotifyContext(ctx, os.Interrupt,
-			syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-		group, groupCtx = errgroup.WithContext(signalCtx)
+		signalCtx, signalCancel = signal.NotifyContext(ctx, signals...)
+		group, groupCtx         = errgroup.WithContext(signalCtx)
 	)
 
 	return &Graceful{
@@ -50,6 +65,12 @@ func InitContext(ctx context.Context) *Graceful {
 	}
 }
 
+// SetCancelOnError set cancel on error value.
+func (g *Graceful) SetCancelOnError(value bool) {
+	g.cancelOnError = value
+}
+
+// SetMaxShutdownTime set max shutdown time value.
 func (g *Graceful) SetMaxShutdownTime(duration time.Duration) {
 	if duration < 1 {
 		g.maxShutdownTime = defaultMaxShutdownTime
@@ -60,6 +81,7 @@ func (g *Graceful) SetMaxShutdownTime(duration time.Duration) {
 	g.maxShutdownTime = duration
 }
 
+// SetMaxShutdownProcess set max shutdown process value.
 func (g *Graceful) SetMaxShutdownProcess(max int) {
 	if max < 1 {
 		g.maxShutdownProcess = defaultMaxShutdownProcess
@@ -70,6 +92,7 @@ func (g *Graceful) SetMaxShutdownProcess(max int) {
 	g.maxShutdownProcess = max
 }
 
+// RegisterProcess register running process to background.
 func (g *Graceful) RegisterProcess(process func() error) {
 	if process == nil {
 		return
@@ -78,10 +101,12 @@ func (g *Graceful) RegisterProcess(process func() error) {
 	g.group.Go(process)
 }
 
+// RegisterShutdownProcess register shutdown process that will be called when got some os signal.
 func (g *Graceful) RegisterShutdownProcess(process func(context.Context) error) {
 	g.RegisterShutdownProcessWithTag(process, "")
 }
 
+// RegisterShutdownProcessWithTag register shutdown process using tag.
 func (g *Graceful) RegisterShutdownProcessWithTag(process func(context.Context) error, tag string) {
 	if process == nil {
 		return
@@ -91,6 +116,7 @@ func (g *Graceful) RegisterShutdownProcessWithTag(process func(context.Context) 
 	g.shutdownProcess = append(g.shutdownProcess, process)
 }
 
+// createTag creating shutdown tag.
 func (g *Graceful) createTag(i int) string {
 	tag := g.shutdownTags[i]
 	if tag == "" {
@@ -100,6 +126,7 @@ func (g *Graceful) createTag(i int) string {
 	return tag
 }
 
+// shutdown handle all shutdown process with concurrency.
 func (g *Graceful) shutdown() error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), g.maxShutdownTime)
 	defer shutdownCancel()
@@ -120,7 +147,11 @@ func (g *Graceful) shutdown() error {
 			if err != nil {
 				log.Error().Str("tag", tag).Err(err).Send()
 			} else {
-				log.Info().Str("tag", tag).Msg("success")
+				log.Info().Str("tag", tag).Msg("shutdown success")
+			}
+
+			if g.cancelOnError {
+				return err
 			}
 
 			return nil
@@ -130,6 +161,7 @@ func (g *Graceful) shutdown() error {
 	return shutdownGroup.Wait()
 }
 
+// Wait waiting for os signal send and call shutdown process when got some signal.
 func (g *Graceful) Wait() error {
 	defer g.signalCancel()
 
